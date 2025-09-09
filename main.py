@@ -7,7 +7,7 @@ from typing import List
 
 app = FastAPI(title="ClarityCheck AI Service")
 
-# Load embedding model
+# Load embedding model to use
 model = SentenceTransformer('all-MiniLM-L6-v2')
 
 # Global variables to store chunks and index
