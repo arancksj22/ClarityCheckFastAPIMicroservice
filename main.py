@@ -9,3 +9,17 @@ app = FastAPI(title="ClarityCheck AI Service")
 
 # Load embedding model
 model = SentenceTransformer('all-MiniLM-L6-v2')
+
+# Global variables to store chunks and index
+chunks_store = []
+faiss_index = None
+
+class TextInput(BaseModel):
+    text: str
+
+class BiasChunksResponse(BaseModel):
+    ethics_chunks: List[str]
+    bias_chunks: List[str]
+    fallacy_chunks: List[str]
+    combined_top_chunks: List[str]
+    total_chunks_found: int
