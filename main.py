@@ -84,7 +84,7 @@ async def load_text(input_data: TextInput):
 
 @app.get("/")
 async def root():
-    return {"message": "ClarityCheck AI Service - Ready for bias detection"}
+    return {"message": "ClarityCheckFastAPIMicroservice"}
 
 if __name__ == "__main__":
     import uvicorn
