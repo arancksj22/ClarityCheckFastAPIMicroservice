@@ -56,3 +56,28 @@ def search_for_query(query: str, top_k: int = 5) -> tuple:
             relevant_chunks.append(chunks_store[indices[0][i]])
     
     return relevant_chunks, scores[0].tolist()
+
+@app.post("/load-text")
+async def load_text(input_data: TextInput):
+    # Load and chunk text, create FAISS index
+    global chunks_store, faiss_index
+    
+    # Chunk the text
+    chunks_store = chunk_text(input_data.text)
+    
+    if not chunks_store:
+        return {"error": "No valid chunks created from text"}
+    
+    # Create embeddings
+    embeddings = model.encode(chunks_store)
+    embeddings = np.array(embeddings).astype('float32')
+    
+    # Create FAISS index
+    dimension = embeddings.shape[1]
+    faiss_index = faiss.IndexFlatIP(dimension)  # Inner product for cosine similarity
+    
+    # Normalize embeddings for cosine similarity
+    faiss.normalize_L2(embeddings)
+    faiss_index.add(embeddings)
+    
+    return {"message": f"Loaded {len(chunks_store)} chunks into FAISS index"}
