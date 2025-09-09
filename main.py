@@ -81,3 +81,11 @@ async def load_text(input_data: TextInput):
     faiss_index.add(embeddings)
     
     return {"message": f"Loaded {len(chunks_store)} chunks into FAISS index"}
+
+@app.get("/")
+async def root():
+    return {"message": "ClarityCheck AI Service - Ready for bias detection"}
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000)
