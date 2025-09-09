@@ -35,3 +35,24 @@ def chunk_text(text: str, chunk_size: int = 500) -> List[str]:
             chunks.append(chunk.strip())
             
     return chunks
+
+def search_for_query(query: str, top_k: int = 5) -> tuple:
+    # Search for chunks matching a specific query
+    if faiss_index is None:
+        return [], []
+    
+    # Encode query
+    query_embedding = model.encode([query])
+    query_embedding = np.array(query_embedding).astype('float32')
+    faiss.normalize_L2(query_embedding)
+    
+    # Search
+    scores, indices = faiss_index.search(query_embedding, min(top_k, len(chunks_store)))
+    
+    # Get chunks with scores above threshold (0.3 is reasonable for similarity)
+    relevant_chunks = []
+    for i, score in enumerate(scores[0]):
+        if score > 0.3:  # Only return reasonably similar chunks
+            relevant_chunks.append(chunks_store[indices[0][i]])
+    
+    return relevant_chunks, scores[0].tolist()
