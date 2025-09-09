@@ -82,6 +82,76 @@ async def load_text(input_data: TextInput):
     
     return {"message": f"Loaded {len(chunks_store)} chunks into FAISS index"}
 
+@app.post("/find-problematic-chunks")
+async def find_problematic_chunks() -> BiasChunksResponse:
+    # Find chunks that might contain bias, ethics issues, or logical fallacies
+    
+    if faiss_index is None:
+        return BiasChunksResponse(
+            ethics_chunks=[],
+            bias_chunks=[],
+            fallacy_chunks=[],
+            combined_top_chunks=[],
+            total_chunks_found=0
+        )
+    
+    # Define queries for each category
+    ethics_queries = [
+        "ethical concerns and moral issues",
+        "ethics violations and misconduct",
+        "informed consent and participant rights"
+    ]
+    
+    bias_queries = [
+        "gender bias and discrimination",
+        "racial bias and stereotyping",
+        "age bias and demographic assumptions",
+        "cultural bias and prejudice"
+    ]
+    
+    fallacy_queries = [
+        "logical fallacies and flawed reasoning",
+        "unsupported claims and assumptions",
+        "correlation versus causation errors",
+        "overgeneralization and hasty conclusions"
+    ]
+    
+    # Search for each category
+    ethics_chunks = set()
+    for query in ethics_queries:
+        chunks, _ = search_for_query(query, top_k=3)
+        ethics_chunks.update(chunks)
+    
+    bias_chunks = set()
+    for query in bias_queries:
+        chunks, _ = search_for_query(query, top_k=3)
+        bias_chunks.update(chunks)
+    
+    fallacy_chunks = set()
+    for query in fallacy_queries:
+        chunks, _ = search_for_query(query, top_k=3)
+        fallacy_chunks.update(chunks)
+    
+    # Combine all unique chunks
+    all_problematic_chunks = ethics_chunks.union(bias_chunks).union(fallacy_chunks)
+    
+    # If we have too many chunks, prioritize by getting the most relevant ones
+    if len(all_problematic_chunks) > 5:
+        # Re-search with a general "problematic content" query to get top chunks
+        combined_query = "bias, ethics violations, logical fallacies, discrimination, unfair assumptions"
+        top_chunks, _ = search_for_query(combined_query, top_k=5)
+    else:
+        top_chunks = list(all_problematic_chunks)
+    
+    return BiasChunksResponse(
+        ethics_chunks=list(ethics_chunks)[:3],
+        bias_chunks=list(bias_chunks)[:3], 
+        fallacy_chunks=list(fallacy_chunks)[:3],
+        combined_top_chunks=top_chunks[:5],  # Top 5 most problematic chunks
+        total_chunks_found=len(all_problematic_chunks)
+    )
+
+
 @app.get("/")
 async def root():
     return {"message": "ClarityCheckFastAPIMicroservice"}
