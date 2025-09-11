@@ -5,7 +5,7 @@ import numpy as np
 from sentence_transformers import SentenceTransformer
 from typing import List
 
-app = FastAPI(title="ClarityCheck AI Service")
+app = FastAPI(title="ClarityCheckAIMicroservice")
 
 # Load embedding model to use
 model = SentenceTransformer('all-MiniLM-L6-v2')
