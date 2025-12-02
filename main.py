@@ -3,17 +3,17 @@ from pydantic import BaseModel
 import faiss
 import numpy as np
 from sentence_transformers import SentenceTransformer
-from typing import List
+from typing import List, Set
 
 app = FastAPI(title="ClarityCheckAIMicroservice")
 
-# Load embedding model to use
+# --- 1. Load Model Globally (Once at startup) ---
+# We load this here so we don't reload it for every request (which would be slow)
+print("Loading AI Model...")
 model = SentenceTransformer('all-MiniLM-L6-v2')
+print("Model Loaded!")
 
-# Global variables to store chunks and index
-chunks_store = []
-faiss_index = None
-
+# --- 2. Data Models ---
 class TextInput(BaseModel):
     text: str
 
@@ -24,22 +24,25 @@ class BiasChunksResponse(BaseModel):
     combined_top_chunks: List[str]
     total_chunks_found: int
 
+# --- 3. Helper Functions ---
+
 def chunk_text(text: str, chunk_size: int = 500) -> List[str]:
-    # Split text into chunks with some overlap for context
+    """Splits text into overlapping chunks."""
     chunks = []
-    overlap = 50  # 50 character overlap between chunks
-    
+    overlap = 50 
     for i in range(0, len(text), chunk_size - overlap):
         chunk = text[i:i + chunk_size]
         if len(chunk.strip()) > 50:  # Only keep substantial chunks
             chunks.append(chunk.strip())
-            
     return chunks
 
-def search_for_query(query: str, top_k: int = 5) -> tuple:
-    # Search for chunks matching a specific query
-    if faiss_index is None:
-        return [], []
+def search_local_index(query: str, index, chunks: List[str], top_k: int = 3) -> List[str]:
+    """
+    Searches a SPECIFIC index (passed as argument) for the query.
+    This ensures we only search the current user's document.
+    """
+    if index is None or not chunks:
+        return []
     
     # Encode query
     query_embedding = model.encode([query])
@@ -47,55 +50,52 @@ def search_for_query(query: str, top_k: int = 5) -> tuple:
     faiss.normalize_L2(query_embedding)
     
     # Search
-    scores, indices = faiss_index.search(query_embedding, min(top_k, len(chunks_store)))
+    # We use min() to ensure we don't ask for more results than we have chunks
+    k_to_search = min(top_k, len(chunks))
+    if k_to_search == 0:
+        return []
+
+    scores, indices = index.search(query_embedding, k_to_search)
     
-    # Get chunks with scores above threshold (0.3 is reasonable for similarity)
+    # Filter results by similarity score threshold
     relevant_chunks = []
     for i, score in enumerate(scores[0]):
-        if score > 0.3:  # Only return reasonably similar chunks
-            relevant_chunks.append(chunks_store[indices[0][i]])
+        if score > 0.25:  # Threshold: Only return if somewhat relevant
+            idx = indices[0][i]
+            if 0 <= idx < len(chunks):
+                relevant_chunks.append(chunks[idx])
     
-    return relevant_chunks, scores[0].tolist()
+    return relevant_chunks
 
-@app.post("/load-text")
-async def load_text(input_data: TextInput):
-    # Load and chunk text, create FAISS index
-    global chunks_store, faiss_index
+# --- 4. The Main Endpoint ---
+
+@app.post("/analyze", response_model=BiasChunksResponse)
+async def analyze_document(input_data: TextInput):
+    """
+    Receives raw text, chunks it, builds a temporary index, 
+    analyzes it for bias/ethics, and returns the report.
+    """
     
-    # Chunk the text
-    chunks_store = chunk_text(input_data.text)
+    # A. Chunk the text
+    current_chunks = chunk_text(input_data.text)
     
-    if not chunks_store:
-        return {"error": "No valid chunks created from text"}
-    
-    # Create embeddings
-    embeddings = model.encode(chunks_store)
+    # Handle empty or too short text
+    if not current_chunks:
+        return BiasChunksResponse(
+            ethics_chunks=[], bias_chunks=[], fallacy_chunks=[], 
+            combined_top_chunks=[], total_chunks_found=0
+        )
+
+    # B. Create Embeddings & Index (In-Memory for this request only)
+    embeddings = model.encode(current_chunks)
     embeddings = np.array(embeddings).astype('float32')
     
-    # Create FAISS index
     dimension = embeddings.shape[1]
-    faiss_index = faiss.IndexFlatIP(dimension)  # Inner product for cosine similarity
-    
-    # Normalize embeddings for cosine similarity
+    local_index = faiss.IndexFlatIP(dimension) # Inner Product (Cosine Similarity)
     faiss.normalize_L2(embeddings)
-    faiss_index.add(embeddings)
-    
-    return {"message": f"Loaded {len(chunks_store)} chunks into FAISS index"}
+    local_index.add(embeddings)
 
-@app.post("/find-problematic-chunks")
-async def find_problematic_chunks() -> BiasChunksResponse:
-    # Find chunks that might contain bias, ethics issues, or logical fallacies
-    
-    if faiss_index is None:
-        return BiasChunksResponse(
-            ethics_chunks=[],
-            bias_chunks=[],
-            fallacy_chunks=[],
-            combined_top_chunks=[],
-            total_chunks_found=0
-        )
-    
-    # Define queries for each category
+    # C. Define Queries
     ethics_queries = [
         "ethical concerns and moral issues",
         "ethics violations and misconduct",
@@ -113,48 +113,45 @@ async def find_problematic_chunks() -> BiasChunksResponse:
         "logical fallacies and flawed reasoning",
         "unsupported claims and assumptions",
         "correlation versus causation errors",
-        "overgeneralization and hasty conclusions"
+        "overgeneralization"
     ]
-    
-    # Search for each category
-    ethics_chunks = set()
-    for query in ethics_queries:
-        chunks, _ = search_for_query(query, top_k=3)
-        ethics_chunks.update(chunks)
-    
-    bias_chunks = set()
-    for query in bias_queries:
-        chunks, _ = search_for_query(query, top_k=3)
-        bias_chunks.update(chunks)
-    
-    fallacy_chunks = set()
-    for query in fallacy_queries:
-        chunks, _ = search_for_query(query, top_k=3)
-        fallacy_chunks.update(chunks)
-    
-    # Combine all unique chunks
-    all_problematic_chunks = ethics_chunks.union(bias_chunks).union(fallacy_chunks)
-    
-    # If we have too many chunks, prioritize by getting the most relevant ones
-    if len(all_problematic_chunks) > 5:
-        # Re-search with a general "problematic content" query to get top chunks
-        combined_query = "bias, ethics violations, logical fallacies, discrimination, unfair assumptions"
-        top_chunks, _ = search_for_query(combined_query, top_k=5)
-    else:
-        top_chunks = list(all_problematic_chunks)
-    
-    return BiasChunksResponse(
-        ethics_chunks=list(ethics_chunks)[:3],
-        bias_chunks=list(bias_chunks)[:3], 
-        fallacy_chunks=list(fallacy_chunks)[:3],
-        combined_top_chunks=top_chunks[:5],  # Top 5 most problematic chunks
-        total_chunks_found=len(all_problematic_chunks)
-    )
 
+    # D. Run Searches
+    # We use Sets to avoid duplicate chunks if multiple queries find the same sentence
+    ethics_set = set()
+    for q in ethics_queries:
+        found = search_local_index(q, local_index, current_chunks, top_k=3)
+        ethics_set.update(found)
+
+    bias_set = set()
+    for q in bias_queries:
+        found = search_local_index(q, local_index, current_chunks, top_k=3)
+        bias_set.update(found)
+
+    fallacy_set = set()
+    for q in fallacy_queries:
+        found = search_local_index(q, local_index, current_chunks, top_k=3)
+        fallacy_set.update(found)
+
+    # E. Calculate "Top Combined" chunks
+    # We create a super-query to find the absolute worst offenders
+    all_problematic = ethics_set.union(bias_set).union(fallacy_set)
+    
+    combined_query = "bias, ethics violations, logical fallacies, discrimination, unfair assumptions"
+    top_chunks = search_local_index(combined_query, local_index, current_chunks, top_k=5)
+
+    # F. Construct & Return Response
+    return BiasChunksResponse(
+        ethics_chunks=list(ethics_set)[:3],
+        bias_chunks=list(bias_set)[:3],
+        fallacy_chunks=list(fallacy_set)[:3],
+        combined_top_chunks=top_chunks,
+        total_chunks_found=len(all_problematic)
+    )
 
 @app.get("/")
 async def root():
-    return {"message": "ClarityCheckFastAPIMicroservice"}
+    return {"message": "ClarityCheck AI Microservice is Running"}
 
 if __name__ == "__main__":
     import uvicorn
