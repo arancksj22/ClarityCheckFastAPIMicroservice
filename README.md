@@ -2,6 +2,14 @@
 
 The **ClarityCheck AI Microservice** is the high-performance "Smart Filter" at the heart of the ClarityCheck platform. It specializes in transforming massive research PDFs into digestible, semantically rich data chunks. By using a Retrieval-Augmented Generation (RAG) approach, it identifies the most problematic sections of a document—focusing on ethics, bias, and logical fallacies—before they are processed by the core orchestration layer.
 
+## Architecture Diagram
+
+<div align="center">
+
+<img src="architecture diagram.jfif" alt="ClarityCheck Architecture Diagram" width="800" />
+
+</div>
+
 ## Key Features
 
 - **Semantic Chunking:** Automatically segments text into 500-character chunks with a 50-character overlap to preserve context across boundaries.
